@@ -1,5 +1,6 @@
 # Agent Instructions
 
+Check the local @CLAUDE.md file for project context.
 This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
 
 ## Quick Reference

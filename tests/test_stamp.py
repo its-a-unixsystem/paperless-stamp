@@ -9,9 +9,13 @@ import pytest
 
 from paperless_stamp.exceptions import StampGenerationError
 from paperless_stamp.stamp import (
+    _STACK_SPACING,
+    _STAMP_WIDTH_RATIO,
     StampConfig,
+    _calculate_stamp_placements,
     _compute_tilt,
     _hex_to_rgb,
+    _projected_half_height,
     generate_stamp_overlay,
 )
 
@@ -54,6 +58,7 @@ class TestComputeTilt:
         for doc_id in range(1000):
             tilt = _compute_tilt(doc_id)
             assert -3.0 <= tilt <= 3.0
+            assert 1.0 <= abs(tilt) <= 3.0
 
     def test_different_ids_differ(self):
         assert _compute_tilt(1) != _compute_tilt(2)
@@ -116,6 +121,36 @@ class TestGenerateStampOverlay:
         )
         with pikepdf.open(io.BytesIO(result)) as pdf:
             assert len(pdf.pages) == 1
+
+    def test_multiple_stamps_do_not_overlap(self, stamp_paid_with_date, stamp_received):
+        stamp_width = A4_WIDTH * _STAMP_WIDTH_RATIO
+        placements = _calculate_stamp_placements(
+            page_width=A4_WIDTH,
+            page_height=A4_HEIGHT,
+            stamps=[stamp_paid_with_date, stamp_received],
+            stamp_width=stamp_width,
+        )
+
+        assert len(placements) == 2
+
+        first_stamp_placement, second_stamp_placement = placements
+        first_half_height = _projected_half_height(
+            stamp_width=first_stamp_placement.layout["width"],
+            stamp_height=first_stamp_placement.layout["height"],
+            tilt_degrees=first_stamp_placement.tilt_degrees,
+        )
+        second_half_height = _projected_half_height(
+            stamp_width=second_stamp_placement.layout["width"],
+            stamp_height=second_stamp_placement.layout["height"],
+            tilt_degrees=second_stamp_placement.tilt_degrees,
+        )
+
+        first_bottom_edge = first_stamp_placement.center_y - first_half_height
+        second_top_edge = second_stamp_placement.center_y + second_half_height
+        expected_gap = first_stamp_placement.layout["height"] * (_STACK_SPACING - 1.0)
+
+        assert second_top_edge <= first_bottom_edge
+        assert first_bottom_edge - second_top_edge == pytest.approx(expected_gap)
 
     def test_deterministic_layout(self, stamp_paid):
         """Same inputs produce same page structure (ReportLab embeds timestamps)."""

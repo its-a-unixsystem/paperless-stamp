@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import math
 import random
 from dataclasses import dataclass
 
@@ -41,6 +42,17 @@ class StampConfig:
         object.__setattr__(self, "text", self.text.upper())
 
 
+@dataclass(frozen=True)
+class StampPlacement:
+    """Computed placement information for a stamp."""
+
+    stamp: StampConfig
+    layout: dict[str, float]
+    tilt_degrees: float
+    center_x: float
+    center_y: float
+
+
 def generate_stamp_overlay(
     page_width: float,
     page_height: float,
@@ -70,17 +82,22 @@ def generate_stamp_overlay(
     c = canvas.Canvas(buf, pagesize=(page_width, page_height))
 
     stamp_width = page_width * _STAMP_WIDTH_RATIO
+    placements = _calculate_stamp_placements(
+        page_width=page_width,
+        page_height=page_height,
+        stamps=stamps,
+        stamp_width=stamp_width,
+    )
 
-    for i, stamp in enumerate(stamps):
-        layout = _calculate_stamp_layout(stamp, stamp_width)
-        tilt = _compute_tilt(stamp.doc_id)
-
-        # Position: right edge at 90%, top edge at 90%, stack downward
-        cx = page_width * _STAMP_RIGHT_EDGE - stamp_width / 2
-        cy = page_height * _STAMP_TOP_EDGE - layout["height"] / 2
-        cy -= i * layout["height"] * _STACK_SPACING
-
-        _draw_stamp(c, cx, cy, tilt, stamp, layout)
+    for placement in placements:
+        _draw_stamp(
+            c,
+            placement.center_x,
+            placement.center_y,
+            placement.tilt_degrees,
+            placement.stamp,
+            placement.layout,
+        )
 
     c.save()
     return buf.getvalue()
@@ -99,11 +116,18 @@ def _hex_to_rgb(hex_color: str) -> tuple[float, float, float]:
 
 
 def _compute_tilt(doc_id: int) -> float:
-    """Compute a deterministic tilt angle in [-3.0, +3.0] degrees from doc_id."""
+    """Compute a deterministic tilt angle in [-3.0, -1.0] ∪ [1.0, 3.0] degrees."""
     digest = hashlib.sha256(str(doc_id).encode()).hexdigest()
-    # Use first 8 hex chars → integer → map to [-3, 3]
-    val = int(digest[:8], 16)
-    return (val / 0xFFFFFFFF) * 6.0 - 3.0
+
+    sign_source = int(digest[:8], 16)
+    magnitude_source = int(digest[8:16], 16)
+
+    tilt_sign = -1.0 if sign_source % 2 else 1.0
+    tilt_magnitude = 1.0 + (magnitude_source / 0xFFFFFFFF) * 2.0
+    tilt_degrees = tilt_sign * tilt_magnitude
+
+    assert 1.0 <= abs(tilt_degrees) <= 3.0
+    return tilt_degrees
 
 
 def _fit_font_size(
@@ -144,6 +168,59 @@ def _calculate_stamp_layout(
         "date_font_size": date_font_size,
         "padding": padding,
     }
+
+
+def _projected_half_height(
+    stamp_width: float,
+    stamp_height: float,
+    tilt_degrees: float,
+) -> float:
+    """Compute stamp half-height projected on the page y-axis after rotation."""
+    tilt_radians = math.radians(tilt_degrees)
+    projected_height = (
+        abs(stamp_height * math.cos(tilt_radians))
+        + abs(stamp_width * math.sin(tilt_radians))
+    )
+    return projected_height / 2
+
+
+def _calculate_stamp_placements(
+    page_width: float,
+    page_height: float,
+    stamps: list[StampConfig],
+    stamp_width: float,
+) -> list[StampPlacement]:
+    """Calculate stacked placements while preventing overlap for mixed stamp sizes."""
+    assert _STACK_SPACING >= 1.0
+
+    stamp_center_x = page_width * _STAMP_RIGHT_EDGE - stamp_width / 2
+    next_stamp_top_edge = page_height * _STAMP_TOP_EDGE
+    placements: list[StampPlacement] = []
+
+    for stamp in stamps:
+        layout = _calculate_stamp_layout(stamp, stamp_width)
+        tilt_degrees = _compute_tilt(stamp.doc_id)
+        projected_half_height = _projected_half_height(
+            stamp_width=layout["width"],
+            stamp_height=layout["height"],
+            tilt_degrees=tilt_degrees,
+        )
+        stamp_center_y = next_stamp_top_edge - projected_half_height
+
+        placements.append(
+            StampPlacement(
+                stamp=stamp,
+                layout=layout,
+                tilt_degrees=tilt_degrees,
+                center_x=stamp_center_x,
+                center_y=stamp_center_y,
+            )
+        )
+
+        stack_gap = layout["height"] * (_STACK_SPACING - 1.0)
+        next_stamp_top_edge = stamp_center_y - projected_half_height - stack_gap
+
+    return placements
 
 
 def _draw_fuzzy_border(

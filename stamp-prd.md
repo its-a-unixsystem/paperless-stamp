@@ -235,11 +235,11 @@ CREATE INDEX idx_history_status ON stamp_history(status);
 *   **Paperless-ngx REST API**:
     *   `GET /api/documents/?tags__name__istartswith=stamp:` — discover documents to stamp.
     *   `GET /api/documents/{id}/download/` — download archive/original file.
-    *   `POST /api/documents/{id}/` or appropriate archive upload endpoint — upload stamped archive file.
+    *   `POST /api/documents/{id}/update_version/` — upload stamped PDF as a new file version (preserves document ID, keeps original as previous version, regenerates thumbnails). **Depends on [PR #12061](https://github.com/paperless-ngx/paperless-ngx/pull/12061), not yet merged.**
     *   `PATCH /api/documents/{id}/` — update tags (remove trigger, add done/error).
     *   `POST /api/documents/{id}/notes/` — attach error notes.
     *   `GET /api/custom_fields/` — resolve custom field names to IDs.
-*   **Auth**: API Token via `PAPERLESS_TOKEN` environment variable.
+*   **Auth**: API Token via `PAPERLESS_TOKEN` environment variable (header: `Authorization: Token <token>`).
 
 ### 4.7 Security & Privacy
 
@@ -265,6 +265,8 @@ paperless-stamp:
     - "8585:8585"  # Web configuration interface
   depends_on:
     - paperless-webserver
+  # No shared media volume needed — stamped PDFs are uploaded via API
+  # using POST /api/documents/{id}/update_version/ (file versioning)
 ```
 
 ### 5.2 Standalone
@@ -280,7 +282,7 @@ PAPERLESS_URL=http://localhost:8000 PAPERLESS_TOKEN=abc123 paperless-stamp
 |---|---|---|
 | **Encrypted/signed PDFs** | Stamping fails, pikepdf raises error | Catch exception, apply `stamp:error` tag with descriptive note |
 | **Race condition**: user edits document while worker is processing | Stamped archive could overwrite concurrent changes | Immediately remove trigger tag at start of processing (before download). If upload fails, re-add trigger tag for retry on next cycle |
-| **Paperless API doesn't support archive upload** | Core workflow broken | Validate API capabilities during startup. Fall back to consumption directory drop if needed |
+| **Paperless API file versioning not yet released** | Core push step blocked | API versioning via `POST /api/documents/{id}/update_version/` (PR #12061) is the planned approach. Stub method raises `NotImplementedError` until PR merges. No filesystem fallback needed. |
 | **Large PDFs** | Processing time > 5s target | Stamp only page 1 (already scoped). Log warning if processing exceeds threshold |
 
 ## 7. Roadmap
@@ -300,10 +302,8 @@ The following custom fields must be created in Paperless-ngx for date integratio
 
 ## 9. Open Questions
 
-These must be validated before or during early development:
-
-| # | Question | Impact | Resolution Path |
+| # | Question | Status | Resolution |
 |---|---|---|---|
-| 1 | **Does the Paperless-ngx REST API support uploading/replacing the archive file?** The documented API may not expose this. If not, the core push step needs a workaround (e.g., direct filesystem access or consumption directory drop). | Blocks the push step entirely | Spike: test `POST /api/documents/{id}/` with a file upload against a dev Paperless instance. Check Paperless-ngx source code for archive upload endpoints. |
-| 2 | **What is the exact Paperless-ngx API filter syntax for tags?** The PRD assumes `tags__name__istartswith=stamp:` works, but the actual Django REST Framework filter parameter names may differ. | Blocks the poll step | Spike: test filter queries against a dev instance. Consult Paperless-ngx API docs. |
-| 3 | **How does Paperless-ngx handle archive file creation when none exists?** If a document was ingested without OCR (no archive), uploading an archive file may or may not be supported. | Edge case in push step | Test with a document that has no archive version. |
+| 1 | **Does the Paperless-ngx REST API support uploading/replacing the archive file?** | **Resolved (M1 spike)** | No current endpoint exists in v2.20.6. However, [PR #12061](https://github.com/paperless-ngx/paperless-ngx/pull/12061) adds `POST /api/documents/{id}/update_version/` — file versioning that preserves document ID, keeps the original as a previous version, regenerates thumbnails, and requires no filesystem access. This is the planned approach. The `upload_version` method is stubbed with `NotImplementedError` until the PR merges. |
+| 2 | **What is the exact Paperless-ngx API filter syntax for tags?** | **Resolved (M1 spike)** | `tags__name__istartswith=stamp:` works. Confirmed in Paperless-ngx `filters.py` (Django REST Framework filter). |
+| 3 | **How does Paperless-ngx handle archive file creation when none exists?** | **Deferred** | The versioning API (PR #12061) should handle this naturally (uploading a version to any document). Will validate once PR merges. For now, documents without an archive file are skipped and tagged with `stamp:error`. |

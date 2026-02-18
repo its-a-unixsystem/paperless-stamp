@@ -24,3 +24,15 @@ class PaperlessConnectionError(PaperlessStampError):
 
 class PaperlessAuthError(PaperlessStampError):
     """Raised when authentication with the Paperless-ngx API fails."""
+
+
+class StampError(PaperlessStampError):
+    """Base exception for stamp-related errors."""
+
+
+class StampGenerationError(StampError):
+    """Raised when stamp overlay generation fails."""
+
+
+class StampMergeError(StampError):
+    """Raised when merging a stamp overlay into a PDF fails."""
